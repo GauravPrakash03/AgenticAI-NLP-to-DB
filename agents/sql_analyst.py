@@ -201,6 +201,8 @@ sql_agent_graph.add_edge("cancelled_sql",END)
 sql_agent_graph.add_edge("execute_sql","represent_final_answer")
 sql_agent_graph.add_edge("represent_final_answer",END)
 
+sql_analyst = sql_agent_graph.compile()
+
 if __name__ == "__main__":
     # Compile the graph
     

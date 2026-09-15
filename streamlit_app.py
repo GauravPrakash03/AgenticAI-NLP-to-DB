@@ -3,6 +3,8 @@ import sys
 from pathlib import Path
 
 import streamlit as st
+from langchain_core.messages import HumanMessage
+from Models.schema import DataAgentSchema
 
 
 ROOT = Path(__file__).resolve().parent
@@ -43,13 +45,27 @@ st.markdown(
 
 
 @st.cache_resource(show_spinner=False)
-def load_agent():
+def load_sql_agent():
     from agents.sql_analyst import sql_agent_graph
 
     return sql_agent_graph.compile()
 
 
-def make_input(question: str) -> dict[str, object]:
+@st.cache_resource(show_spinner=False)
+def load_etl_agent():
+    from agents.etl_analyst import etl_analyst
+
+    return etl_analyst
+
+
+@st.cache_resource(show_spinner=False)
+def load_router_agent():
+    from agents.data_agent import data_agent
+
+    return data_agent
+
+
+def make_sql_input(question: str) -> dict[str, object]:
     return {
         "messages": [],
         "user_question": question,
@@ -63,7 +79,7 @@ def make_input(question: str) -> dict[str, object]:
     }
 
 
-def render_result(result: dict[str, object]) -> None:
+def render_sql_result(result: dict[str, object]) -> None:
     st.markdown('<div class="section-label">Response</div>', unsafe_allow_html=True)
     final_answer = result.get("final_answer") or "The agent did not return a final answer."
     st.markdown('<div class="answer-box">', unsafe_allow_html=True)
@@ -93,12 +109,64 @@ def render_result(result: dict[str, object]) -> None:
         st.write(result.get("curated_ques") or "No curated question returned.")
 
 
+def message_text(message: object) -> str:
+    content = getattr(message, "content", message)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            part if isinstance(part, str) else str(part.get("text", part))
+            for part in content
+        )
+    return str(content)
+
+
+def render_etl_result(result: dict[str, object]) -> None:
+    messages = result.get("messages", [])
+    final_message = message_text(messages[-1]) if messages else "No ETL response returned."
+
+    st.markdown('<div class="section-label">ETL response</div>', unsafe_allow_html=True)
+    st.markdown('<div class="answer-box">', unsafe_allow_html=True)
+    st.markdown(final_message)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    with st.expander("Agent trace", expanded=False):
+        for index, message in enumerate(messages, start=1):
+            st.markdown(f"**Step {index}**")
+            st.code(message_text(message))
+
+
+def render_router_result(result: dict[str, object]) -> None:
+    messages = result.get("messages", [])
+    route = str(result.get("route_response") or "unknown").upper()
+    final_message = message_text(messages[-1]) if messages else "No routed response returned."
+
+    st.markdown('<div class="section-label">Routed response</div>', unsafe_allow_html=True)
+    route_columns = st.columns(2)
+    with route_columns[0]:
+        st.metric("Selected agent", route)
+    with route_columns[1]:
+        st.metric("Pipeline complete", "Yes" if messages else "No")
+
+    st.markdown('<div class="answer-box">', unsafe_allow_html=True)
+    st.markdown(str(result.get("final_answer") or final_message))
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if route == "SQL":
+        render_sql_result(result)
+
+    with st.expander("Router trace", expanded=False):
+        for index, message in enumerate(messages, start=1):
+            st.markdown(f"**Step {index}**")
+            st.code(message_text(message))
+
+
 with st.sidebar:
     st.markdown("## DATA AGENT")
     st.caption("Natural-language questions over your PostgreSQL data.")
     st.markdown("---")
-    st.markdown("**Pipeline**")
-    st.caption("Curate question  →  Generate SQL  →  Safety review  →  Execute  →  Explain")
+    st.markdown("**Capabilities**")
+    st.caption("Automatic routing, SQL analysis, and API-based ETL workflows")
     st.markdown("---")
     st.caption("Backend: existing LangGraph agent")
     st.caption("Frontend: Streamlit")
@@ -111,31 +179,114 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-with st.form("question_form"):
-    question = st.text_area(
-        "Your question",
-        placeholder="Which payment methods are used most often?",
-        height=120,
-        label_visibility="visible",
-    )
-    submitted = st.form_submit_button("Run analysis", type="primary", use_container_width=False)
+mode = st.radio(
+    "Workflow",
+    ["Auto Router", "SQL Analyst", "ETL Analyst"],
+    horizontal=True,
+)
 
-if submitted:
-    question = question.strip()
-    if not question:
-        st.warning("Enter a question before running the analysis.")
-    else:
-        try:
-            with st.status("Working through the data agent...", expanded=False) as status:
-                agent = load_agent()
-                result = agent.invoke(make_input(question))
-                status.update(label="Analysis complete", state="complete")
-            st.session_state["last_result"] = result
-            st.session_state["last_question"] = question
-        except Exception as error:
-            st.error("The backend could not complete this request.")
-            st.exception(error)
+if mode == "Auto Router":
+    with st.form("router_question_form"):
+        question = st.text_area(
+            "Your request",
+            placeholder="Ask a database question or describe an ETL task.",
+            height=120,
+        )
+        submitted = st.form_submit_button("Route and run", type="primary")
+
+    if submitted:
+        question = question.strip()
+        if not question:
+            st.warning("Enter a request before running the agent.")
+        else:
+            try:
+                with st.status("Routing request and running the selected agent...", expanded=False) as status:
+                    result = load_router_agent().invoke(
+                        DataAgentSchema(
+                            messages=[HumanMessage(content=question)],
+                            route_response="",
+                        )
+                    )
+                    status.update(label="Routed workflow complete", state="complete")
+                st.session_state["last_result"] = result
+                st.session_state["last_mode"] = mode
+                st.session_state["last_question"] = question
+            except Exception as error:
+                st.error("The routed backend could not complete this request.")
+                st.exception(error)
+
+elif mode == "SQL Analyst":
+    with st.form("sql_question_form"):
+        question = st.text_area(
+            "Your question",
+            placeholder="Which payment methods are used most often?",
+            height=120,
+        )
+        submitted = st.form_submit_button("Run SQL analysis", type="primary")
+
+    if submitted:
+        question = question.strip()
+        if not question:
+            st.warning("Enter a question before running the analysis.")
+        else:
+            try:
+                with st.status("Running the SQL analyst...", expanded=False) as status:
+                    result = load_sql_agent().invoke(make_sql_input(question))
+                    status.update(label="SQL analysis complete", state="complete")
+                st.session_state["last_result"] = result
+                st.session_state["last_mode"] = mode
+                st.session_state["last_question"] = question
+            except Exception as error:
+                st.error("The SQL backend could not complete this request.")
+                st.exception(error)
+else:
+    with st.form("etl_question_form"):
+        api_url = st.text_input("API endpoint", placeholder="https://pokeapi.co/api/v2/pokemon/")
+        etl_columns = st.columns(3)
+        with etl_columns[0]:
+            output_folder = st.text_input("Output folder", value="data/extract")
+        with etl_columns[1]:
+            output_format = st.selectbox("Output format", ["csv", "json", "parquet"])
+        with etl_columns[2]:
+            transform_folder = st.text_input("Transform folder", value="data/transform")
+        transform_request = st.text_area(
+            "Transformation request (optional)",
+            placeholder="Filter records and save the transformed result.",
+            height=90,
+        )
+        submitted = st.form_submit_button("Run ETL workflow", type="primary")
+
+    if submitted:
+        if not api_url.strip():
+            st.warning("Enter an API endpoint before running the ETL workflow.")
+        else:
+            transform_text = transform_request.strip() or "Keep the extracted data unchanged."
+            question = (
+                f"Extract data from the API endpoint '{api_url.strip()}' and save it to "
+                f"{output_folder.strip()} in {output_format} format. Then transform the "
+                f"data and save it to {transform_folder.strip()}. {transform_text}"
+            )
+            try:
+                with st.status("Running the ETL analyst...", expanded=False) as status:
+                    result = load_etl_agent().invoke(
+                        {"messages": [HumanMessage(content=question)]}
+                    )
+                    status.update(label="ETL workflow complete", state="complete")
+                st.session_state["last_result"] = result
+                st.session_state["last_mode"] = mode
+                st.session_state["last_question"] = question
+            except Exception as error:
+                st.error("The ETL backend could not complete this request.")
+                st.exception(error)
+
 
 if "last_result" in st.session_state:
-    st.caption(f'Last question: {st.session_state["last_question"]}')
-    render_result(st.session_state["last_result"])
+    st.caption(
+        f'{st.session_state["last_mode"]} · {st.session_state["last_question"]}'
+    )
+    if st.session_state["last_mode"] == "Auto Router":
+        render_router_result(st.session_state["last_result"])
+    elif st.session_state["last_mode"] == "SQL Analyst":
+        render_sql_result(st.session_state["last_result"])
+    else:
+        render_etl_result(st.session_state["last_result"])

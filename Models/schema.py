@@ -3,7 +3,7 @@ from typing import Literal, Annotated
 from operator import add
 
 class AgentSchema(BaseModel):
-    messages: Annotated[list,add] = Field(..., description="list of messages to be processed")
+    messages: Annotated[list,add] = Field(..., description="list of messages to be processed by SQL Analyst agent")
     user_question: str = Field(..., description="the original question asked by the user")
     curated_ques: str = Field(..., description="curated user question")
     prompt_query_context: str = Field(..., description="A detailed prompt with SQL DB context that will help agent to generate SQL query")
@@ -17,3 +17,21 @@ class JudgeSchema(BaseModel):
     answer: Literal['Yes','No'] = Field(...,description="indicates whether the generated SQL query is safe to execute or not")
     comments: str = Field(...,description="additional comments or feedback from the judge regarding the SQL query ")
 
+class ETLAgentSchema(BaseModel):
+    messages: Annotated[list,add] = Field(..., description="list of messages to be processed by ETL Agent")
+
+class RouterSchema(BaseModel):
+    answer: Literal["sql","etl"] = Field(..., description="Indicates whether the user's question is related to SQL or ETL operations")
+    comments: str = Field(..., description="Additional comments or feedback regarding the classification of the user's question")
+
+class DataAgentSchema(BaseModel):
+    messages: Annotated[list,add] = Field(..., description="list of messages to be processed by Data Agent")
+    route_response: str = Field("", description="the response from the router indicating whether to route to SQL or ETL operations")
+    user_question: str = ""
+    curated_ques: str = ""
+    generated_sql_query: str = ""
+    is_safe: str = ""
+    comments: str = ""
+    sql_query_execution_result: str = ""
+    final_answer: str = ""
+    etl_result: str = ""
