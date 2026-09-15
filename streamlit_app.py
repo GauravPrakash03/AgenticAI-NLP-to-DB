@@ -79,7 +79,53 @@ def make_sql_input(question: str) -> dict[str, object]:
     }
 
 
-def render_sql_result(result: dict[str, object]) -> None:
+DATA_FILE_EXTENSIONS = {
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".jsonl": "application/json",
+    ".parquet": "application/octet-stream",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls": "application/vnd.ms-excel",
+    ".feather": "application/octet-stream",
+}
+IGNORED_DIRECTORIES = {".git", ".venv", "__pycache__", ".pytest_cache"}
+
+
+def find_data_files() -> list[Path]:
+    files = []
+    for path in ROOT.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in DATA_FILE_EXTENSIONS:
+            continue
+        if any(part in IGNORED_DIRECTORIES for part in path.parts):
+            continue
+        files.append(path)
+    return sorted(files, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def render_downloadable_files() -> None:
+    data_files = find_data_files()
+    st.markdown('<div class="section-label">Generated data files</div>', unsafe_allow_html=True)
+    if not data_files:
+        st.caption("No generated data files found in the workspace yet.")
+        return
+
+    st.caption("Files created by the backend are available here for download.")
+    for index, path in enumerate(data_files):
+        relative_path = path.relative_to(ROOT).as_posix()
+        size_kb = max(path.stat().st_size / 1024, 0.1)
+        with open(path, "rb") as data_file:
+            file_bytes = data_file.read()
+        st.download_button(
+            f"Download {relative_path} ({size_kb:.1f} KB)",
+            data=file_bytes,
+            file_name=path.name,
+            mime=DATA_FILE_EXTENSIONS[path.suffix.lower()],
+            key=f"download_{index}_{relative_path}",
+            use_container_width=True,
+        )
+
+
+def render_sql_result(result: dict[str, object], question: str = "") -> None:
     st.markdown('<div class="section-label">Response</div>', unsafe_allow_html=True)
     final_answer = result.get("final_answer") or "The agent did not return a final answer."
     st.markdown('<div class="answer-box">', unsafe_allow_html=True)
@@ -107,6 +153,7 @@ def render_sql_result(result: dict[str, object]) -> None:
         st.write(result.get("comments") or "No safety comments returned.")
     with st.expander("Curated question"):
         st.write(result.get("curated_ques") or "No curated question returned.")
+    render_downloadable_files()
 
 
 def message_text(message: object) -> str:
@@ -121,7 +168,7 @@ def message_text(message: object) -> str:
     return str(content)
 
 
-def render_etl_result(result: dict[str, object]) -> None:
+def render_etl_result(result: dict[str, object], question: str = "") -> None:
     messages = result.get("messages", [])
     final_message = message_text(messages[-1]) if messages else "No ETL response returned."
 
@@ -134,9 +181,10 @@ def render_etl_result(result: dict[str, object]) -> None:
         for index, message in enumerate(messages, start=1):
             st.markdown(f"**Step {index}**")
             st.code(message_text(message))
+    render_downloadable_files()
 
 
-def render_router_result(result: dict[str, object]) -> None:
+def render_router_result(result: dict[str, object], question: str = "") -> None:
     messages = result.get("messages", [])
     route = str(result.get("route_response") or "unknown").upper()
     final_message = message_text(messages[-1]) if messages else "No routed response returned."
@@ -153,7 +201,9 @@ def render_router_result(result: dict[str, object]) -> None:
     st.markdown('</div>', unsafe_allow_html=True)
 
     if route == "SQL":
-        render_sql_result(result)
+        render_sql_result(result, question)
+    else:
+        render_etl_result(result, question)
 
     with st.expander("Router trace", expanded=False):
         for index, message in enumerate(messages, start=1):
@@ -285,8 +335,17 @@ if "last_result" in st.session_state:
         f'{st.session_state["last_mode"]} · {st.session_state["last_question"]}'
     )
     if st.session_state["last_mode"] == "Auto Router":
-        render_router_result(st.session_state["last_result"])
+        render_router_result(
+            st.session_state["last_result"],
+            st.session_state["last_question"],
+        )
     elif st.session_state["last_mode"] == "SQL Analyst":
-        render_sql_result(st.session_state["last_result"])
+        render_sql_result(
+            st.session_state["last_result"],
+            st.session_state["last_question"],
+        )
     else:
-        render_etl_result(st.session_state["last_result"])
+        render_etl_result(
+            st.session_state["last_result"],
+            st.session_state["last_question"],
+        )
